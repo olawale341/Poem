@@ -42,14 +42,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
-import java.util.concurrent.TimeUnit
 
 data class VideoScene(
     val text: String,
@@ -68,10 +67,6 @@ class VideoStoryViewModel : ViewModel() {
 
     private var mediaPlayer: MediaPlayer? = null
     private var maleTts: TextToSpeech? = null
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .build()
 
     // High-Definition Non-Repeating Curated Photo Banks for Any Subject
     private val topicPhotoBanks = mapOf(
@@ -81,6 +76,10 @@ class VideoStoryViewModel : ViewModel() {
             "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=1080&q=80",
             "https://images.unsplash.com/photo-1565372195458-9de0b320ef04?w=1080&q=80",
             "https://images.unsplash.com/photo-1579621970563-ebec7560ff3e?w=1080&q=80"
+        ),
+        "cash" to listOf(
+            "https://images.unsplash.com/photo-1559526324-4b87b5e36e44?w=1080&q=80",
+            "https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?w=1080&q=80"
         ),
         "gold" to listOf(
             "https://images.unsplash.com/photo-1610375461246-83df859d849d?w=1080&q=80",
@@ -130,8 +129,8 @@ class VideoStoryViewModel : ViewModel() {
             maleTts = TextToSpeech(context.applicationContext) { status ->
                 if (status == TextToSpeech.SUCCESS) {
                     maleTts?.language = Locale.UK // British Male
-                    maleTts?.setPitch(0.82f)       // Deep voice
-                    maleTts?.setSpeechRate(0.85f)   // Cinematic pacing
+                    maleTts?.setPitch(0.82f)       // Deep tone
+                    maleTts?.setSpeechRate(0.85f)   // Cinematic delivery
                 }
             }
         }
@@ -141,8 +140,8 @@ class VideoStoryViewModel : ViewModel() {
         val lower = sentence.lowercase()
         for ((topic, photos) in topicPhotoBanks) {
             if (lower.contains(topic)) {
-                // Pick a random photo from the topic list so it never repeats
-                val randomPhoto = photos[(0 until photos.size).random()]
+                // Random photo from the list so it never repeats
+                val randomPhoto = photos.random()
                 return Pair(topic, randomPhoto)
             }
         }
@@ -163,22 +162,26 @@ class VideoStoryViewModel : ViewModel() {
             for ((idx, line) in lines.withIndex()) {
                 val (topic, photoUrl) = selectMatchingImage(line, idx)
 
-                // Download UK Male Voice (Brian) to local MP3 file
+                // Download UK Male Voice using native Android networking (No library required)
                 var audioFile: File? = null
                 try {
                     val encoded = URLEncoder.encode(line, StandardCharsets.UTF_8.toString())
                     val voiceUrl = "https://api.streamelements.com/kappa/v2/speech?voice=Brian&text=$encoded"
-                    val req = Request.Builder().url(voiceUrl).get().build()
-                    val resp = client.newCall(req).execute()
+                    
+                    val connection = URL(voiceUrl).openConnection() as HttpURLConnection
+                    connection.connectTimeout = 12000
+                    connection.readTimeout = 12000
+                    connection.connect()
 
-                    if (resp.isSuccessful) {
-                        val bytes = resp.body?.bytes()
-                        if (bytes != null && bytes.isNotEmpty()) {
+                    if (connection.responseCode == 200) {
+                        val bytes = connection.inputStream.use { it.readBytes() }
+                        if (bytes.isNotEmpty()) {
                             val tempFile = File(context.cacheDir, "scene_audio_${idx}_${System.currentTimeMillis()}.mp3")
                             FileOutputStream(tempFile).use { it.write(bytes) }
                             audioFile = tempFile
                         }
                     }
+                    connection.disconnect()
                 } catch (e: Exception) {
                     audioFile = null
                 }
@@ -303,7 +306,7 @@ class VideoStoryViewModel : ViewModel() {
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Saved to device.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Saved to device storage.", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -415,7 +418,6 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
     val context = LocalContext.current
     val scene = vm.scenes.getOrNull(vm.currentIndex)
 
-    // Smooth video zoom effect (Ken Burns movement)
     val zoomScale by animateFloatAsState(
         targetValue = 1.16f,
         animationSpec = tween(durationMillis = 7000, easing = LinearEasing),
@@ -456,7 +458,7 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
                 )
         )
 
-        // Top Reel Progress Bar
+        // Top Reel Progress Bar (Fixed the 3.5.dp bug to 4.dp!)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -467,7 +469,7 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .height(3.5.dp)
+                        .height(4.dp)
                         .background(
                             color = if (idx <= vm.currentIndex) Color(0xFFFFD700) else Color.White.copy(alpha = 0.25f),
                             shape = CircleShape
@@ -514,7 +516,7 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
 
             Spacer(modifier = Modifier.height(28.dp))
 
-            // Video Controls Row (Guaranteed to compile without icon errors)
+            // Video Controls Row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
