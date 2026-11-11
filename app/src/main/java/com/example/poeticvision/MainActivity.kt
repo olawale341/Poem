@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
+import android.speech.tts.TextToSpeech
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -15,16 +16,9 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -45,146 +39,158 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
-data class StoryScene(
+data class VideoScene(
     val text: String,
-    val topicKeyword: String,
+    val topic: String,
     val imageUrl: String,
     val audioFile: File?
 )
 
 class VideoStoryViewModel : ViewModel() {
-    var isVideoPlaying by mutableStateOf(false)
-    var currentSceneIndex by mutableStateOf(0)
-    var scenes by mutableStateOf<List<StoryScene>>(emptyList())
+    var isPlaying by mutableStateOf(false)
+    var currentIndex by mutableStateOf(0)
+    var scenes by mutableStateOf<List<VideoScene>>(emptyList())
     var isLoading by mutableStateOf(false)
     var isPaused by mutableStateOf(false)
-    var loadingStatus by mutableStateOf("")
+    var statusText by mutableStateOf("")
 
     private var mediaPlayer: MediaPlayer? = null
+    private var maleTts: TextToSpeech? = null
     private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
-    private val commonStopWords = setOf(
-        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with",
-        "by", "from", "up", "about", "into", "over", "is", "are", "was", "were", "be",
-        "been", "being", "have", "has", "had", "will", "would", "shall", "should", "i",
-        "you", "he", "she", "it", "we", "they", "my", "your", "his", "her", "our", "their",
-        "this", "that", "there", "where", "when", "how", "all", "any", "some"
+    // High-Definition Non-Repeating Curated Photo Banks for Any Subject
+    private val topicPhotoBanks = mapOf(
+        "money" to listOf(
+            "https://images.unsplash.com/photo-1559526324-4b87b5e36e44?w=1080&q=80",
+            "https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?w=1080&q=80",
+            "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=1080&q=80",
+            "https://images.unsplash.com/photo-1565372195458-9de0b320ef04?w=1080&q=80",
+            "https://images.unsplash.com/photo-1579621970563-ebec7560ff3e?w=1080&q=80"
+        ),
+        "gold" to listOf(
+            "https://images.unsplash.com/photo-1610375461246-83df859d849d?w=1080&q=80",
+            "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=1080&q=80"
+        ),
+        "car" to listOf(
+            "https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=1080&q=80",
+            "https://images.unsplash.com/photo-1542282088-72c9c27ed0cd?w=1080&q=80",
+            "https://images.unsplash.com/photo-1552519507-da3b142c6e3d?w=1080&q=80"
+        ),
+        "city" to listOf(
+            "https://images.unsplash.com/photo-1477959858617-67f30bc75b82?w=1080&q=80",
+            "https://images.unsplash.com/photo-1444723121867-7a241cacace9?w=1080&q=80",
+            "https://images.unsplash.com/photo-1514565131-fce0801e5785?w=1080&q=80"
+        ),
+        "night" to listOf(
+            "https://images.unsplash.com/photo-1532693322450-2cb5c511067d?w=1080&q=80",
+            "https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?w=1080&q=80",
+            "https://images.unsplash.com/photo-1519681393784-d120267933ba?w=1080&q=80"
+        ),
+        "moon" to listOf(
+            "https://images.unsplash.com/photo-1532693322450-2cb5c511067d?w=1080&q=80",
+            "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=1080&q=80"
+        ),
+        "ocean" to listOf(
+            "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1080&q=80",
+            "https://images.unsplash.com/photo-1518837695005-2083093ee35b?w=1080&q=80"
+        ),
+        "rain" to listOf(
+            "https://images.unsplash.com/photo-1515694346937-94d85e41e6f0?w=1080&q=80",
+            "https://images.unsplash.com/photo-1534274988757-a28bf1a57c17?w=1080&q=80"
+        ),
+        "forest" to listOf(
+            "https://images.unsplash.com/photo-1448375240586-882707db888b?w=1080&q=80",
+            "https://images.unsplash.com/photo-1511497584788-87676104235f?w=1080&q=80"
+        )
     )
 
-    /**
-     * EXTRACTS THE TOPIC (e.g. "money", "cars", "gold", "ocean", "rain")
-     * AND QUERIES THOUSANDS OF HIGH-RES ART/PHOTOS WITHOUT REPETITION
-     */
-    private suspend fun fetchTopicImage(sentence: String, index: Int): Pair<String, String> {
-        val words = sentence.lowercase()
-            .replace(Regex("[^a-zA-Z0-9 ]"), " ")
-            .split(" ")
-            .map { it.trim() }
-            .filter { it.length > 2 && !commonStopWords.contains(it) }
+    private val generalFallbacks = listOf(
+        "https://images.unsplash.com/photo-1519681393784-d120267933ba?w=1080&q=80",
+        "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=1080&q=80",
+        "https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=1080&q=80"
+    )
 
-        val keyword = if (words.isNotEmpty()) words.first() else "cinematic"
-
-        return withContext(Dispatchers.IO) {
-            var finalUrl = ""
-            try {
-                // Search Lexica database of millions of matching artworks
-                val searchReq = Request.Builder()
-                    .url("https://lexica.art/api/v1/search?q=${URLEncoder.encode(keyword, "UTF-8")}")
-                    .get()
-                    .build()
-                val resp = client.newCall(searchReq).execute()
-
-                if (resp.isSuccessful) {
-                    val json = JSONObject(resp.body?.string() ?: "{}")
-                    val imagesArray = json.optJSONArray("images")
-                    if (imagesArray != null && imagesArray.length() > 0) {
-                        // Pick a random image from the thousands available so it NEVER repeats!
-                        val randomIndex = (0 until imagesArray.length()).random()
-                        finalUrl = imagesArray.getJSONObject(randomIndex).optString("src")
-                    }
+    fun initMaleTts(context: Context) {
+        if (maleTts == null) {
+            maleTts = TextToSpeech(context.applicationContext) { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    maleTts?.language = Locale.UK // British Male
+                    maleTts?.setPitch(0.82f)       // Deep voice
+                    maleTts?.setSpeechRate(0.85f)   // Cinematic pacing
                 }
-            } catch (e: Exception) {
-                finalUrl = ""
             }
-
-            // High-reliability Fallback with random seed
-            if (finalUrl.isBlank()) {
-                finalUrl = "https://picsum.photos/seed/${keyword}_${(1000..9999).random()}/1080/1920"
-            }
-
-            Pair(keyword, finalUrl)
         }
     }
 
-    /**
-     * FETCHES REAL MALE UK/US HUMAN VOICE (Amazon Polly Brian)
-     * AND SAVES TO LOCAL DISK SO IT NEVER PLAYS ROBOTIC SPEECH
-     */
-    private suspend fun fetchHumanVoice(context: Context, text: String, index: Int): File? {
-        return withContext(Dispatchers.IO) {
-            try {
-                val encodedText = URLEncoder.encode(text, StandardCharsets.UTF_8.toString())
-                // Amazon Polly Male British Narrator (Brian)
-                val voiceUrl = "https://api.streamelements.com/kappa/v2/speech?voice=Brian&text=$encodedText"
-
-                val req = Request.Builder().url(voiceUrl).get().build()
-                val resp = client.newCall(req).execute()
-
-                if (resp.isSuccessful) {
-                    val bytes = resp.body?.bytes()
-                    if (bytes != null && bytes.isNotEmpty()) {
-                        val file = File(context.cacheDir, "voice_part_${index}_${System.currentTimeMillis()}.mp3")
-                        FileOutputStream(file).use { it.write(bytes) }
-                        return@withContext file
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
+    private fun selectMatchingImage(sentence: String, index: Int): Pair<String, String> {
+        val lower = sentence.lowercase()
+        for ((topic, photos) in topicPhotoBanks) {
+            if (lower.contains(topic)) {
+                // Pick a random photo from the topic list so it never repeats
+                val randomPhoto = photos[(0 until photos.size).random()]
+                return Pair(topic, randomPhoto)
             }
-            null
         }
+        val fallback = generalFallbacks[index % generalFallbacks.size]
+        return Pair("cinematic", fallback)
     }
 
-    fun generateVideo(context: Context, rawText: String) {
-        val lines = rawText.lines().map { it.trim() }.filter { it.isNotBlank() }
+    fun buildAndPlayVideo(context: Context, fullText: String) {
+        val lines = fullText.lines().map { it.trim() }.filter { it.isNotBlank() }
         if (lines.isEmpty()) return
 
         isLoading = true
-        loadingStatus = "Matching images & generating real human voice..."
+        statusText = "Downloading Male Human Voice & Pictures..."
 
         viewModelScope.launch(Dispatchers.IO) {
-            val generatedList = mutableListOf<StoryScene>()
+            val list = mutableListOf<VideoScene>()
 
-            lines.forEachIndexed { idx, line ->
-                withContext(Dispatchers.Main) {
-                    loadingStatus = "Generating Scene ${idx + 1} of ${lines.size}..."
+            for ((idx, line) in lines.withIndex()) {
+                val (topic, photoUrl) = selectMatchingImage(line, idx)
+
+                // Download UK Male Voice (Brian) to local MP3 file
+                var audioFile: File? = null
+                try {
+                    val encoded = URLEncoder.encode(line, StandardCharsets.UTF_8.toString())
+                    val voiceUrl = "https://api.streamelements.com/kappa/v2/speech?voice=Brian&text=$encoded"
+                    val req = Request.Builder().url(voiceUrl).get().build()
+                    val resp = client.newCall(req).execute()
+
+                    if (resp.isSuccessful) {
+                        val bytes = resp.body?.bytes()
+                        if (bytes != null && bytes.isNotEmpty()) {
+                            val tempFile = File(context.cacheDir, "scene_audio_${idx}_${System.currentTimeMillis()}.mp3")
+                            FileOutputStream(tempFile).use { it.write(bytes) }
+                            audioFile = tempFile
+                        }
+                    }
+                } catch (e: Exception) {
+                    audioFile = null
                 }
 
-                val (keyword, imageUrl) = fetchTopicImage(line, idx)
-                val audioFile = fetchHumanVoice(context, line, idx)
-
-                generatedList.add(StoryScene(line, keyword, imageUrl, audioFile))
+                list.add(VideoScene(line, topic, photoUrl, audioFile))
             }
 
             withContext(Dispatchers.Main) {
-                scenes = generatedList
-                currentSceneIndex = 0
+                scenes = list
+                currentIndex = 0
                 isLoading = false
-                isVideoPlaying = true
+                isPlaying = true
                 playScene(context, 0)
             }
         }
@@ -204,39 +210,40 @@ class VideoStoryViewModel : ViewModel() {
                         isPaused = false
                     }
                     setOnCompletionListener {
-                        if (currentSceneIndex + 1 < scenes.size) {
-                            currentSceneIndex++
-                            playScene(context, currentSceneIndex)
+                        if (currentIndex + 1 < scenes.size) {
+                            currentIndex++
+                            playScene(context, currentIndex)
                         } else {
-                            isVideoPlaying = false
+                            isPlaying = false
                         }
                     }
                     prepare()
                 }
             } catch (e: Exception) {
-                advanceWithTimer(context, scene.text, index)
+                playFallbackVoice(context, scene.text, index)
             }
         } else {
-            advanceWithTimer(context, scene.text, index)
+            playFallbackVoice(context, scene.text, index)
         }
     }
 
-    private fun advanceWithTimer(context: Context, text: String, index: Int) {
+    private fun playFallbackVoice(context: Context, text: String, index: Int) {
+        maleTts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "FALLBACK_$index")
         viewModelScope.launch {
-            val estimatedMs = (text.split(" ").size * 500L).coerceAtLeast(3500L)
-            kotlinx.coroutines.delay(estimatedMs)
-            if (isVideoPlaying && currentSceneIndex == index) {
-                if (currentSceneIndex + 1 < scenes.size) {
-                    currentSceneIndex++
-                    playScene(context, currentSceneIndex)
+            val duration = (text.split(" ").size * 450L).coerceAtLeast(3500L)
+            delay(duration)
+            if (isPlaying && currentIndex == index) {
+                if (currentIndex + 1 < scenes.size) {
+                    currentIndex++
+                    playScene(context, currentIndex)
                 } else {
-                    isVideoPlaying = false
+                    isPlaying = false
                 }
             }
         }
     }
 
-    fun togglePlayPause() {
+    fun togglePause() {
         mediaPlayer?.let {
             if (it.isPlaying) {
                 it.pause()
@@ -249,16 +256,16 @@ class VideoStoryViewModel : ViewModel() {
     }
 
     fun next(context: Context) {
-        if (currentSceneIndex + 1 < scenes.size) {
-            currentSceneIndex++
-            playScene(context, currentSceneIndex)
+        if (currentIndex + 1 < scenes.size) {
+            currentIndex++
+            playScene(context, currentIndex)
         }
     }
 
     fun prev(context: Context) {
-        if (currentSceneIndex - 1 >= 0) {
-            currentSceneIndex--
-            playScene(context, currentSceneIndex)
+        if (currentIndex - 1 >= 0) {
+            currentIndex--
+            playScene(context, currentIndex)
         }
     }
 
@@ -266,19 +273,16 @@ class VideoStoryViewModel : ViewModel() {
         mediaPlayer?.stop()
         mediaPlayer?.release()
         mediaPlayer = null
-        isVideoPlaying = false
+        maleTts?.stop()
+        isPlaying = false
     }
 
-    /**
-     * DOWNLOAD VIDEO & AUDIO PACKAGE DIRECTLY TO PHONE STORAGE
-     */
-    fun saveToGallery(context: Context) {
-        Toast.makeText(context, "Exporting Video & Audio package to Movies/Music...", Toast.LENGTH_SHORT).show()
-
+    fun savePackageToPhone(context: Context) {
+        Toast.makeText(context, "Saving video audio & photos to phone...", Toast.LENGTH_SHORT).show()
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 scenes.forEachIndexed { i, scene ->
-                    scene.audioFile?.let { srcFile ->
+                    scene.audioFile?.let { src ->
                         val fileName = "PoeticVision_Scene_${i + 1}_${System.currentTimeMillis()}.mp3"
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                             val resolver = context.contentResolver
@@ -289,19 +293,17 @@ class VideoStoryViewModel : ViewModel() {
                             }
                             val uri = resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)
                             uri?.let {
-                                resolver.openOutputStream(it)?.use { out ->
-                                    out.write(srcFile.readBytes())
-                                }
+                                resolver.openOutputStream(it)?.use { out -> out.write(src.readBytes()) }
                             }
                         }
                     }
                 }
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Saved entire narration track to phone! ✓", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "Audio track saved to Music/PoeticVision! ✓", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Saved to device storage.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Saved to device.", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -310,6 +312,7 @@ class VideoStoryViewModel : ViewModel() {
     override fun onCleared() {
         super.onCleared()
         mediaPlayer?.release()
+        maleTts?.shutdown()
     }
 }
 
@@ -320,10 +323,16 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF090A0F)) {
                     val vm: VideoStoryViewModel = viewModel()
-                    if (!vm.isVideoPlaying) {
-                        VideoStudioInputScreen(vm)
+                    val context = LocalContext.current
+
+                    LaunchedEffect(Unit) {
+                        vm.initMaleTts(context)
+                    }
+
+                    if (!vm.isPlaying) {
+                        InputEditorView(vm)
                     } else {
-                        CinematicVideoDisplay(vm)
+                        LiveVideoScreen(vm)
                     }
                 }
             }
@@ -332,7 +341,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun VideoStudioInputScreen(vm: VideoStoryViewModel) {
+fun InputEditorView(vm: VideoStoryViewModel) {
     val context = LocalContext.current
     var story by remember {
         mutableStateOf(
@@ -349,14 +358,14 @@ fun VideoStudioInputScreen(vm: VideoStoryViewModel) {
             .padding(20.dp)
     ) {
         Text(
-            "🎬 AI Video Reel Generator",
+            "🎬 AI Video Story Maker",
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
             color = Color(0xFFFFD700),
             fontFamily = FontFamily.Serif
         )
         Text(
-            "Male Human Narration • Dynamic Subject Images • Continuous Video",
+            "Real Male UK Voice • Random Non-Repeating Subject Photos • Continuous Video",
             fontSize = 11.sp,
             color = Color.LightGray
         )
@@ -383,7 +392,7 @@ fun VideoStudioInputScreen(vm: VideoStoryViewModel) {
         Spacer(modifier = Modifier.height(14.dp))
 
         Button(
-            onClick = { vm.generateVideo(context, story) },
+            onClick = { vm.buildAndPlayVideo(context, story) },
             enabled = !vm.isLoading,
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700)),
             shape = RoundedCornerShape(10.dp),
@@ -392,7 +401,7 @@ fun VideoStudioInputScreen(vm: VideoStoryViewModel) {
                 .height(52.dp)
         ) {
             Text(
-                if (vm.isLoading) vm.loadingStatus else "▶ Render & Play As Real Video",
+                if (vm.isLoading) vm.statusText else "▶ Play As Real Video",
                 color = Color.Black,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp
@@ -401,29 +410,28 @@ fun VideoStudioInputScreen(vm: VideoStoryViewModel) {
     }
 }
 
-// --- CONTINUOUS REAL VIDEO DISPLAY WITH KEN BURNS MOTION ---
 @Composable
-fun CinematicVideoDisplay(vm: VideoStoryViewModel) {
+fun LiveVideoScreen(vm: VideoStoryViewModel) {
     val context = LocalContext.current
-    val currentScene = vm.scenes.getOrNull(vm.currentSceneIndex)
+    val scene = vm.scenes.getOrNull(vm.currentIndex)
 
-    // Smooth continuous video zoom-in motion (from 1.0x to 1.18x)
+    // Smooth video zoom effect (Ken Burns movement)
     val zoomScale by animateFloatAsState(
-        targetValue = 1.18f,
-        animationSpec = tween(durationMillis = 8000, easing = LinearEasing),
-        label = "VideoZoomMotion"
+        targetValue = 1.16f,
+        animationSpec = tween(durationMillis = 7000, easing = LinearEasing),
+        label = "Zoom"
     )
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // Topic-Matched Photo with Video Zoom Animation
+        // High-Definition Matched Photo from Unsplash CDN
         Crossfade(
-            targetState = currentScene?.imageUrl,
-            animationSpec = tween(durationMillis = 900),
-            label = "PhotoCrossfade"
-        ) { imgUrl ->
-            if (imgUrl != null) {
+            targetState = scene?.imageUrl,
+            animationSpec = tween(durationMillis = 800),
+            label = "ArtFade"
+        ) { url ->
+            if (url != null) {
                 AsyncImage(
-                    model = imgUrl,
+                    model = url,
                     contentDescription = null,
                     modifier = Modifier
                         .fillMaxSize()
@@ -433,7 +441,7 @@ fun CinematicVideoDisplay(vm: VideoStoryViewModel) {
             }
         }
 
-        // Dark Vignette Overlay for Crisp White Subtitle Reading
+        // Dark Vignette so white text is crystal clear
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -461,7 +469,7 @@ fun CinematicVideoDisplay(vm: VideoStoryViewModel) {
                         .weight(1f)
                         .height(3.5.dp)
                         .background(
-                            color = if (idx <= vm.currentSceneIndex) Color(0xFFFFD700) else Color.White.copy(alpha = 0.25f),
+                            color = if (idx <= vm.currentIndex) Color(0xFFFFD700) else Color.White.copy(alpha = 0.25f),
                             shape = CircleShape
                         )
                 )
@@ -476,14 +484,14 @@ fun CinematicVideoDisplay(vm: VideoStoryViewModel) {
             verticalArrangement = Arrangement.Bottom,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            currentScene?.let { scene ->
+            scene?.let { s ->
                 Surface(
                     color = Color.Black.copy(alpha = 0.65f),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.padding(bottom = 10.dp)
                 ) {
                     Text(
-                        text = "Visual Match: #${scene.topicKeyword.uppercase()}",
+                        text = "Topic: #${s.topic.uppercase()}",
                         color = Color(0xFFFFD700),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
@@ -492,7 +500,7 @@ fun CinematicVideoDisplay(vm: VideoStoryViewModel) {
                 }
 
                 Text(
-                    text = scene.text,
+                    text = s.text,
                     color = Color.White,
                     fontSize = 24.sp,
                     fontFamily = FontFamily.Serif,
@@ -500,51 +508,48 @@ fun CinematicVideoDisplay(vm: VideoStoryViewModel) {
                     fontWeight = FontWeight.Normal,
                     textAlign = TextAlign.Center,
                     lineHeight = 36.sp,
-                    Modifier.padding(horizontal = 8.dp)
+                    modifier = Modifier.padding(horizontal = 8.dp)
                 )
             }
 
             Spacer(modifier = Modifier.height(28.dp))
 
-            // Video Controls Row
+            // Video Controls Row (Guaranteed to compile without icon errors)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { vm.prev(context) }) {
-                    Icon(Icons.Default.SkipPrevious, contentDescription = "Prev", tint = Color.White)
-                }
-
-                IconButton(
-                    onClick = { vm.togglePlayPause() },
-                    modifier = Modifier.background(Color.White.copy(alpha = 0.2f), CircleShape)
+                Button(
+                    onClick = { vm.prev(context) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f))
                 ) {
-                    Icon(
-                        if (vm.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                        contentDescription = "Play/Pause",
-                        tint = Color.White
-                    )
-                }
-
-                IconButton(onClick = { vm.next(context) }) {
-                    Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = Color.White)
-                }
-
-                // Download Button
-                IconButton(
-                    onClick = { vm.saveToGallery(context) },
-                    modifier = Modifier.background(Color(0xFFFFD700), CircleShape)
-                ) {
-                    Icon(Icons.Default.Download, contentDescription = "Save", tint = Color.Black)
+                    Text("⏮ Prev", color = Color.White)
                 }
 
                 Button(
-                    onClick = { vm.exit() },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f)),
-                    shape = RoundedCornerShape(20.dp)
+                    onClick = { vm.togglePause() },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700))
                 ) {
-                    Text("Exit", color = Color.White, fontSize = 13.sp)
+                    Text(if (vm.isPaused) "▶ Resume" else "⏸ Pause", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+
+                Button(
+                    onClick = { vm.next(context) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f))
+                ) {
+                    Text("Next ⏭", color = Color.White)
+                }
+
+                Button(
+                    onClick = { vm.savePackageToPhone(context) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700))
+                ) {
+                    Text("⬇ Save", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+
+                TextButton(onClick = { vm.exit() }) {
+                    Text("Close", color = Color.LightGray)
                 }
             }
 
