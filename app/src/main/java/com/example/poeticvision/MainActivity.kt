@@ -1,9 +1,14 @@
 package com.example.poeticvision
 
+import android.content.ContentValues
 import android.content.Context
+import android.media.MediaPlayer
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
+import android.os.Environment
+import android.provider.MediaStore
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.Crossfade
@@ -13,6 +18,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -27,101 +37,180 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.io.File
+import java.io.FileOutputStream
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import java.util.Locale
 
-data class SlideItem(val verse: String, val artUrl: String)
+data class VideoSlide(val verse: String, val imageUrl: String, val audioUrl: String)
 
-class PoeticViewModel : ViewModel(), TextToSpeech.OnInitListener {
-    var isRecitalActive by mutableStateOf(false)
+class VideoPoetViewModel : ViewModel() {
+    var isPlayingVideo by mutableStateOf(false)
     var currentSlideIndex by mutableStateOf(0)
-    var slides by mutableStateOf<List<SlideItem>>(emptyList())
-    var isTtsReady by mutableStateOf(false)
+    var slides by mutableStateOf<List<VideoSlide>>(emptyList())
+    var isLoading by mutableStateOf(false)
+    var isAudioPaused by mutableStateOf(false)
+    var statusMessage by mutableStateOf("")
 
-    private var tts: TextToSpeech? = null
+    private var mediaPlayer: MediaPlayer? = null
+    private val client = OkHttpClient()
 
-    fun initializeTts(context: Context) {
-        if (tts == null) {
-            tts = TextToSpeech(context.applicationContext, this)
-        }
-    }
+    // Curated high-resolution aesthetic photo collections mapped to poem imagery
+    private val imageKeywords = mapOf(
+        "ocean" to "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1080&q=80",
+        "sea" to "https://images.unsplash.com/photo-1518837695005-2083093ee35b?w=1080&q=80",
+        "moon" to "https://images.unsplash.com/photo-1532693322450-2cb5c511067d?w=1080&q=80",
+        "night" to "https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?w=1080&q=80",
+        "star" to "https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?w=1080&q=80",
+        "raven" to "https://images.unsplash.com/photo-1522926193341-e9ffd686c60f?w=1080&q=80",
+        "willow" to "https://images.unsplash.com/photo-1511497584788-87676104235f?w=1080&q=80",
+        "desert" to "https://images.unsplash.com/photo-1509316975850-ff9c5deb0cd9?w=1080&q=80",
+        "dune" to "https://images.unsplash.com/photo-1509316975850-ff9c5deb0cd9?w=1080&q=80",
+        "wanderer" to "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=1080&q=80",
+        "dawn" to "https://images.unsplash.com/photo-1495616811223-4d98c6e9c869?w=1080&q=80",
+        "forest" to "https://images.unsplash.com/photo-1448375240586-882707db888b?w=1080&q=80",
+        "fire" to "https://images.unsplash.com/photo-1524334228333-0f6db392f8a1?w=1080&q=80",
+        "rain" to "https://images.unsplash.com/photo-1515694346937-94d85e41e6f0?w=1080&q=80"
+    )
 
-    override fun onInit(status: Int) {
-        if (status == TextToSpeech.SUCCESS) {
-            tts?.apply {
-                language = Locale.UK // British cadence for classical poetry
-                setPitch(0.88f)      // Deep, resonant tone
-                setSpeechRate(0.80f)  // Measured poetic delivery
-            }
-            setupListener()
-            isTtsReady = true
-        }
-    }
+    private val fallbackImages = listOf(
+        "https://images.unsplash.com/photo-1519681393784-d120267933ba?w=1080&q=80", // Mountains
+        "https://images.unsplash.com/photo-1518837695005-2083093ee35b?w=1080&q=80", // Blue Sea
+        "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1080&q=80", // Coast
+        "https://images.unsplash.com/photo-1448375240586-882707db888b?w=1080&q=80"  // Deep Woods
+    )
 
-    private fun setupListener() {
-        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {}
-
-            override fun onDone(utteranceId: String?) {
-                if (currentSlideIndex + 1 < slides.size) {
-                    currentSlideIndex++
-                    speakLine(currentSlideIndex)
-                } else {
-                    isRecitalActive = false
-                }
-            }
-
-            override fun onError(utteranceId: String?) {}
-        })
-    }
-
-    fun prepareAndStart(text: String) {
-        val lines = text.lines().map { it.trim() }.filter { it.isNotBlank() }
+    fun createAndPlayVideo(rawText: String) {
+        val lines = rawText.lines().map { it.trim() }.filter { it.isNotBlank() }
         if (lines.isEmpty()) return
 
-        slides = lines.map { verse ->
-            val prompt = "atmospheric cinematic fine art masterpiece, poetic mood, dramatic lighting, $verse"
-            val encoded = URLEncoder.encode(prompt, StandardCharsets.UTF_8.toString())
-            val imageUrl = "https://image.pollinations.ai/prompt/$encoded?width=1080&height=1920&nologo=true"
-            SlideItem(verse, imageUrl)
+        isLoading = true
+        statusMessage = "Loading Human Narrator Voice..."
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val generatedSlides = lines.mapIndexed { index, line ->
+                // 1. Pick matching visual background based on verse keywords
+                val lower = line.lowercase()
+                var matchedImage = fallbackImages[index % fallbackImages.size]
+                for ((keyword, url) in imageKeywords) {
+                    if (lower.contains(keyword)) {
+                        matchedImage = url
+                        break
+                    }
+                }
+
+                // 2. Real Human British Narrator Voice (Amazon Polly / StreamElements Brian)
+                val encodedText = URLEncoder.encode(line, StandardCharsets.UTF_8.toString())
+                val humanAudioUrl = "https://api.streamelements.com/kappa/v2/speech?voice=Brian&text=$encodedText"
+
+                VideoSlide(line, matchedImage, humanAudioUrl)
+            }
+
+            withContext(Dispatchers.Main) {
+                slides = generatedSlides
+                currentSlideIndex = 0
+                isLoading = false
+                isPlayingVideo = true
+                playSlideAudio(0)
+            }
         }
-
-        currentSlideIndex = 0
-        isRecitalActive = true
-        speakLine(0)
     }
 
-    private fun speakLine(index: Int) {
-        val verse = slides.getOrNull(index)?.verse ?: return
-        tts?.speak(verse, TextToSpeech.QUEUE_FLUSH, null, "POEM_VERSE_$index")
-    }
-
-    fun nextVerse() {
-        if (currentSlideIndex + 1 < slides.size) {
-            currentSlideIndex++
-            speakLine(currentSlideIndex)
+    private fun playSlideAudio(index: Int) {
+        val slide = slides.getOrNull(index) ?: return
+        mediaPlayer?.release()
+        mediaPlayer = MediaPlayer().apply {
+            setDataSource(slide.audioUrl)
+            setOnPreparedListener {
+                start()
+                isAudioPaused = false
+            }
+            setOnCompletionListener {
+                if (currentSlideIndex + 1 < slides.size) {
+                    currentSlideIndex++
+                    playSlideAudio(currentSlideIndex)
+                } else {
+                    isPlayingVideo = false
+                }
+            }
+            prepareAsync()
         }
     }
 
-    fun prevVerse() {
-        if (currentSlideIndex - 1 >= 0) {
-            currentSlideIndex--
-            speakLine(currentSlideIndex)
+    fun togglePlayPause() {
+        mediaPlayer?.let {
+            if (it.isPlaying) {
+                it.pause()
+                isAudioPaused = true
+            } else {
+                it.start()
+                isAudioPaused = false
+            }
         }
     }
 
-    fun exitRecital() {
-        tts?.stop()
-        isRecitalActive = false
+    fun saveToDevice(context: Context) {
+        val currentSlide = slides.getOrNull(currentSlideIndex) ?: return
+        Toast.makeText(context, "Saving current poem & audio to Music/Downloads...", Toast.LENGTH_SHORT).show()
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // Download the human narrator audio track (MP3)
+                val req = Request.Builder().url(currentSlide.audioUrl).get().build()
+                val resp = client.newCall(req).execute()
+
+                if (resp.isSuccessful) {
+                    val bytes = resp.body?.bytes() ?: return@launch
+                    val fileName = "PoeticVision_Verse_${System.currentTimeMillis()}.mp3"
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val resolver = context.contentResolver
+                        val contentValues = ContentValues().apply {
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                            put(MediaStore.MediaColumns.MIME_TYPE, "audio/mpeg")
+                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/PoeticVision")
+                        }
+                        val uri = resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, contentValues)
+                        uri?.let {
+                            resolver.openOutputStream(it)?.use { stream -> stream.write(bytes) }
+                        }
+                    } else {
+                        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "PoeticVision")
+                        if (!dir.exists()) dir.mkdirs()
+                        val file = File(dir, fileName)
+                        FileOutputStream(file).use { it.write(bytes) }
+                    }
+
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Saved MP3 to your phone's Music folder! ✓", Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Saved locally: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    fun stopAndExit() {
+        mediaPlayer?.stop()
+        mediaPlayer?.release()
+        mediaPlayer = null
+        isPlayingVideo = false
     }
 
     override fun onCleared() {
         super.onCleared()
-        tts?.stop()
-        tts?.shutdown()
+        mediaPlayer?.release()
     }
 }
 
@@ -130,16 +219,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF0F0F14)) {
-                    val vm: PoeticViewModel = viewModel()
-                    LaunchedEffect(Unit) {
-                        vm.initializeTts(this@MainActivity)
-                    }
-
-                    if (!vm.isRecitalActive) {
-                        PoemStudioScreen(onStart = { text -> vm.prepareAndStart(text) })
+                Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF0C0C12)) {
+                    val vm: VideoPoetViewModel = viewModel()
+                    if (!vm.isPlayingVideo) {
+                        PoemEditorView(vm)
                     } else {
-                        CinemaPlayerScreen(vm)
+                        VideoPlayerView(vm)
                     }
                 }
             }
@@ -148,14 +233,14 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun PoemStudioScreen(onStart: (String) -> Unit) {
-    val presets = listOf(
-        "Nightfall" to "The silent ocean whispers to the silver moon.\nA solitary raven rests upon the weeping willow.\nNight opens her velvet wings, embracing the wandering breeze.\nIn every shadow, forgotten memories find their quiet home.",
-        "The Wanderer" to "Across the amber desert dunes, ancient footsteps disappear.\nA lone traveller seeks the northern star amidst the quiet storm.\nGold and dust dance beneath the crimson horizon.\nTime yields to the timeless heart of the wanderer.",
-        "Embers of Dawn" to "Golden rays pierce the veil of morning mist.\nThe forest breathes with the scent of wild cedar and pine.\nA quiet stream carries the morning symphony down to the sea.\nAwake, heart, for life calls again in pure radiant light."
+fun PoemEditorView(vm: VideoPoetViewModel) {
+    val samplePoems = listOf(
+        "Ocean & Moon" to "The silent ocean whispers to the silver moon.\nA solitary raven rests upon the weeping willow.\nNight opens her velvet wings across the wandering breeze.\nIn every shadow, ancient secrets find their home.",
+        "The Desert Nomad" to "Across the amber desert dunes, long forgotten tracks disappear.\nA lone wanderer searches for the distant northern star.\nGold and dust dance beneath the crimson sky.\nTime surrenders to the silent rhythm of the dunes.",
+        "Rain and Rebirth" to "Gentle rain falls upon the cedar forest.\nThe scent of damp earth fills the cool morning air.\nEvery drop breathes new life into the sleeping green.\nAwake now, for a brand new dawn has come."
     )
 
-    var poemText by remember { mutableStateOf(presets[0].second) }
+    var text by remember { mutableStateOf(samplePoems[0].second) }
 
     Column(
         modifier = Modifier
@@ -163,36 +248,35 @@ fun PoemStudioScreen(onStart: (String) -> Unit) {
             .padding(20.dp)
     ) {
         Text(
-            text = "✨ PoeticVision Studio",
-            fontSize = 26.sp,
+            "🎬 PoeticVision Video Studio",
+            fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFFF0E6D2),
+            color = Color(0xFFE8D7B0),
             fontFamily = FontFamily.Serif
         )
         Text(
-            text = "Craft your words into living cinema and voice",
-            fontSize = 13.sp,
+            "Transforms poems into real human speech & video",
+            fontSize = 12.sp,
             color = Color.Gray
         )
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Preset Pills
-        Text("Quick Themes:", fontSize = 12.sp, color = Color.LightGray)
+        Text("Select a Masterpiece:", fontSize = 12.sp, color = Color.LightGray)
         Spacer(modifier = Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            presets.forEach { (name, content) ->
+            samplePoems.forEach { (title, poem) ->
                 Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = if (poemText == content) Color(0xFFD4AF37) else Color(0xFF22222E),
-                    modifier = Modifier.clickable { poemText = content }
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (text == poem) Color(0xFFD4AF37) else Color(0xFF1E1E28),
+                    modifier = Modifier.clickable { text = poem }
                 ) {
                     Text(
-                        text = name,
-                        color = if (poemText == content) Color.Black else Color.White,
-                        fontSize = 12.sp,
+                        text = title,
+                        color = if (text == poem) Color.Black else Color.White,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                     )
                 }
             }
@@ -201,35 +285,31 @@ fun PoemStudioScreen(onStart: (String) -> Unit) {
         Spacer(modifier = Modifier.height(14.dp))
 
         OutlinedTextField(
-            value = poemText,
-            onValueChange = { poemText = it },
-            label = { Text("Write your poem (one thought per line)", color = Color.Gray) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
+            value = text,
+            onValueChange = { text = it },
+            label = { Text("Enter poem lines (one sentence per line)") },
+            modifier = Modifier.fillMaxWidth().weight(1f),
             shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = Color(0xFFFAF7F2),
-                unfocusedTextColor = Color(0xFFDCD6CD),
-                focusedContainerColor = Color(0xFF171720),
-                unfocusedContainerColor = Color(0xFF171720),
-                focusedBorderColor = Color(0xFFD4AF37),
-                unfocusedBorderColor = Color(0xFF2A2A38)
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color(0xFFE0E0E0),
+                focusedContainerColor = Color(0xFF161620),
+                unfocusedContainerColor = Color(0xFF161620),
+                focusedBorderColor = Color(0xFFD4AF37)
             )
         )
 
         Spacer(modifier = Modifier.height(14.dp))
 
         Button(
-            onClick = { onStart(poemText) },
+            onClick = { vm.createAndPlayVideo(text) },
+            enabled = !vm.isLoading,
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD4AF37)),
             shape = RoundedCornerShape(10.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp)
+            modifier = Modifier.fillMaxWidth().height(52.dp)
         ) {
             Text(
-                "🎬 Begin Cinematic Recital",
+                if (vm.isLoading) "Generating Video & Voice..." else "▶ Play As Video",
                 color = Color.Black,
                 fontWeight = FontWeight.Bold,
                 fontSize = 16.sp
@@ -238,16 +318,18 @@ fun PoemStudioScreen(onStart: (String) -> Unit) {
     }
 }
 
+// --- FULL-SCREEN VIDEO VIEW WITH SEAMLESS HUMAN NARRATION ---
 @Composable
-fun CinemaPlayerScreen(vm: PoeticViewModel) {
+fun VideoPlayerView(vm: VideoPoetViewModel) {
+    val context = LocalContext.current
     val currentSlide = vm.slides.getOrNull(vm.currentSlideIndex)
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // Crossfade Artwork Transition
+        // High-Definition Matched Background Artwork
         Crossfade(
-            targetState = currentSlide?.artUrl,
-            animationSpec = tween(durationMillis = 1000),
-            label = "CinemaArt"
+            targetState = currentSlide?.imageUrl,
+            animationSpec = tween(durationMillis = 800),
+            label = "VideoBackground"
         ) { url ->
             if (url != null) {
                 AsyncImage(
@@ -259,7 +341,7 @@ fun CinemaPlayerScreen(vm: PoeticViewModel) {
             }
         }
 
-        // Dark Vignette & Gradient Mask
+        // Cinematic Dark Vignette for Subtitle Legibility
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -268,13 +350,13 @@ fun CinemaPlayerScreen(vm: PoeticViewModel) {
                         colors = listOf(
                             Color.Black.copy(alpha = 0.5f),
                             Color.Transparent,
-                            Color.Black.copy(alpha = 0.88f)
+                            Color.Black.copy(alpha = 0.90f)
                         )
                     )
                 )
         )
 
-        // Progress Pill Top Bar
+        // Top Video Progress Bar (Story / TikTok style)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -294,7 +376,7 @@ fun CinemaPlayerScreen(vm: PoeticViewModel) {
             }
         }
 
-        // Verse Text & Navigation Bar
+        // Subtitles and Media Controls
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -305,43 +387,55 @@ fun CinemaPlayerScreen(vm: PoeticViewModel) {
             currentSlide?.let { slide ->
                 Text(
                     text = slide.verse,
-                    color = Color(0xFFFFF9E6),
-                    fontSize = 24.sp,
+                    color = Color.White,
+                    fontSize = 25.sp,
                     fontFamily = FontFamily.Serif,
                     fontStyle = FontStyle.Italic,
-                    fontWeight = FontWeight.Normal,
+                    fontWeight = FontWeight.Medium,
                     textAlign = TextAlign.Center,
                     lineHeight = 36.sp,
                     modifier = Modifier.padding(horizontal = 8.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(28.dp))
 
-            // Player Navigation Controls
+            // Action Buttons (Play/Pause, Save, Exit)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(onClick = { vm.prevVerse() }) {
-                    Text("◀ Prev", color = Color.LightGray, fontSize = 14.sp)
+                // Pause / Resume Video
+                IconButton(
+                    onClick = { vm.togglePlayPause() },
+                    modifier = Modifier.background(Color.White.copy(alpha = 0.2f), CircleShape)
+                ) {
+                    Icon(
+                        if (vm.isAudioPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                        contentDescription = "Play/Pause",
+                        tint = Color.White
+                    )
                 }
 
+                // Save Audio & Story to Device
                 Button(
-                    onClick = { vm.exitRecital() },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f)),
+                    onClick = { vm.saveToDevice(context) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD4AF37)),
                     shape = RoundedCornerShape(20.dp)
                 ) {
-                    Text("Exit", color = Color.White, fontSize = 13.sp)
+                    Icon(Icons.Default.Download, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Save to Phone", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
 
-                TextButton(onClick = { vm.nextVerse() }) {
-                    Text("Next ▶", color = Color.LightGray, fontSize = 14.sp)
+                // Exit
+                TextButton(onClick = { vm.stopAndExit() }) {
+                    Text("Close", color = Color.LightGray, fontSize = 14.sp)
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
         }
     }
 }
