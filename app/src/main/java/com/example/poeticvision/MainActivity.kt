@@ -58,12 +58,12 @@ data class VideoScene(
 )
 
 class VideoStoryViewModel : ViewModel() {
-    var isPlaying by mutableStateOf(false)
-    var currentIndex by mutableStateOf(0)
-    var scenes by mutableStateOf<List<VideoScene>>(emptyList())
-    var isLoading by mutableStateOf(false)
-    var isPaused by mutableStateOf(false)
-    var statusText by mutableStateOf("")
+    val isPlaying = mutableStateOf(false)
+    val currentIndex = mutableStateOf(0)
+    val scenes = mutableStateOf<List<VideoScene>>(emptyList())
+    val isLoading = mutableStateOf(false)
+    val isPaused = mutableStateOf(false)
+    val statusText = mutableStateOf("")
 
     private var mediaPlayer: MediaPlayer? = null
     private var maleTts: TextToSpeech? = null
@@ -128,9 +128,9 @@ class VideoStoryViewModel : ViewModel() {
         if (maleTts == null) {
             maleTts = TextToSpeech(context.applicationContext) { status ->
                 if (status == TextToSpeech.SUCCESS) {
-                    maleTts?.language = Locale.UK // British Male
-                    maleTts?.setPitch(0.82f)       // Deep tone
-                    maleTts?.setSpeechRate(0.85f)   // Cinematic delivery
+                    maleTts?.language = Locale.UK
+                    maleTts?.setPitch(0.82f)
+                    maleTts?.setSpeechRate(0.85f)
                 }
             }
         }
@@ -140,7 +140,6 @@ class VideoStoryViewModel : ViewModel() {
         val lower = sentence.lowercase()
         for ((topic, photos) in topicPhotoBanks) {
             if (lower.contains(topic)) {
-                // Random photo from the list so it never repeats
                 val randomPhoto = photos.random()
                 return Pair(topic, randomPhoto)
             }
@@ -153,8 +152,8 @@ class VideoStoryViewModel : ViewModel() {
         val lines = fullText.lines().map { it.trim() }.filter { it.isNotBlank() }
         if (lines.isEmpty()) return
 
-        isLoading = true
-        statusText = "Downloading Male Human Voice & Pictures..."
+        isLoading.value = true
+        statusText.value = "Downloading Male Human Voice & Pictures..."
 
         viewModelScope.launch(Dispatchers.IO) {
             val list = mutableListOf<VideoScene>()
@@ -162,12 +161,11 @@ class VideoStoryViewModel : ViewModel() {
             for ((idx, line) in lines.withIndex()) {
                 val (topic, photoUrl) = selectMatchingImage(line, idx)
 
-                // Download UK Male Voice using native Android networking (No library required)
                 var audioFile: File? = null
                 try {
                     val encoded = URLEncoder.encode(line, StandardCharsets.UTF_8.toString())
                     val voiceUrl = "https://api.streamelements.com/kappa/v2/speech?voice=Brian&text=$encoded"
-                    
+
                     val connection = URL(voiceUrl).openConnection() as HttpURLConnection
                     connection.connectTimeout = 12000
                     connection.readTimeout = 12000
@@ -190,17 +188,17 @@ class VideoStoryViewModel : ViewModel() {
             }
 
             withContext(Dispatchers.Main) {
-                scenes = list
-                currentIndex = 0
-                isLoading = false
-                isPlaying = true
+                scenes.value = list
+                currentIndex.value = 0
+                isLoading.value = false
+                isPlaying.value = true
                 playScene(context, 0)
             }
         }
     }
 
     private fun playScene(context: Context, index: Int) {
-        val scene = scenes.getOrNull(index) ?: return
+        val scene = scenes.value.getOrNull(index) ?: return
         mediaPlayer?.release()
         mediaPlayer = null
 
@@ -210,14 +208,14 @@ class VideoStoryViewModel : ViewModel() {
                     setDataSource(scene.audioFile.absolutePath)
                     setOnPreparedListener {
                         start()
-                        isPaused = false
+                        isPaused.value = false
                     }
                     setOnCompletionListener {
-                        if (currentIndex + 1 < scenes.size) {
-                            currentIndex++
-                            playScene(context, currentIndex)
+                        if (currentIndex.value + 1 < scenes.value.size) {
+                            currentIndex.value++
+                            playScene(context, currentIndex.value)
                         } else {
-                            isPlaying = false
+                            isPlaying.value = false
                         }
                     }
                     prepare()
@@ -235,12 +233,12 @@ class VideoStoryViewModel : ViewModel() {
         viewModelScope.launch {
             val duration = (text.split(" ").size * 450L).coerceAtLeast(3500L)
             delay(duration)
-            if (isPlaying && currentIndex == index) {
-                if (currentIndex + 1 < scenes.size) {
-                    currentIndex++
-                    playScene(context, currentIndex)
+            if (isPlaying.value && currentIndex.value == index) {
+                if (currentIndex.value + 1 < scenes.value.size) {
+                    currentIndex.value++
+                    playScene(context, currentIndex.value)
                 } else {
-                    isPlaying = false
+                    isPlaying.value = false
                 }
             }
         }
@@ -250,25 +248,25 @@ class VideoStoryViewModel : ViewModel() {
         mediaPlayer?.let {
             if (it.isPlaying) {
                 it.pause()
-                isPaused = true
+                isPaused.value = true
             } else {
                 it.start()
-                isPaused = false
+                isPaused.value = false
             }
         }
     }
 
     fun next(context: Context) {
-        if (currentIndex + 1 < scenes.size) {
-            currentIndex++
-            playScene(context, currentIndex)
+        if (currentIndex.value + 1 < scenes.value.size) {
+            currentIndex.value++
+            playScene(context, currentIndex.value)
         }
     }
 
     fun prev(context: Context) {
-        if (currentIndex - 1 >= 0) {
-            currentIndex--
-            playScene(context, currentIndex)
+        if (currentIndex.value - 1 >= 0) {
+            currentIndex.value--
+            playScene(context, currentIndex.value)
         }
     }
 
@@ -277,14 +275,14 @@ class VideoStoryViewModel : ViewModel() {
         mediaPlayer?.release()
         mediaPlayer = null
         maleTts?.stop()
-        isPlaying = false
+        isPlaying.value = false
     }
 
     fun savePackageToPhone(context: Context) {
         Toast.makeText(context, "Saving video audio & photos to phone...", Toast.LENGTH_SHORT).show()
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                scenes.forEachIndexed { i, scene ->
+                scenes.value.forEachIndexed { i, scene ->
                     scene.audioFile?.let { src ->
                         val fileName = "PoeticVision_Scene_${i + 1}_${System.currentTimeMillis()}.mp3"
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -332,7 +330,7 @@ class MainActivity : ComponentActivity() {
                         vm.initMaleTts(context)
                     }
 
-                    if (!vm.isPlaying) {
+                    if (!vm.isPlaying.value) {
                         InputEditorView(vm)
                     } else {
                         LiveVideoScreen(vm)
@@ -346,7 +344,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun InputEditorView(vm: VideoStoryViewModel) {
     val context = LocalContext.current
-    var story by remember {
+    val story = remember {
         mutableStateOf(
             "Money flows to those who master patience and focus.\n" +
             "In the dark night, the neon city comes alive with hustle.\n" +
@@ -376,8 +374,8 @@ fun InputEditorView(vm: VideoStoryViewModel) {
         Spacer(modifier = Modifier.height(14.dp))
 
         OutlinedTextField(
-            value = story,
-            onValueChange = { story = it },
+            value = story.value,
+            onValueChange = { story.value = it },
             label = { Text("Write your story / poem (one sentence per line)") },
             modifier = Modifier
                 .fillMaxWidth()
@@ -395,8 +393,8 @@ fun InputEditorView(vm: VideoStoryViewModel) {
         Spacer(modifier = Modifier.height(14.dp))
 
         Button(
-            onClick = { vm.buildAndPlayVideo(context, story) },
-            enabled = !vm.isLoading,
+            onClick = { vm.buildAndPlayVideo(context, story.value) },
+            enabled = !vm.isLoading.value,
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700)),
             shape = RoundedCornerShape(10.dp),
             modifier = Modifier
@@ -404,7 +402,7 @@ fun InputEditorView(vm: VideoStoryViewModel) {
                 .height(52.dp)
         ) {
             Text(
-                if (vm.isLoading) vm.statusText else "▶ Play As Real Video",
+                if (vm.isLoading.value) vm.statusText.value else "▶ Play As Real Video",
                 color = Color.Black,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp
@@ -416,7 +414,8 @@ fun InputEditorView(vm: VideoStoryViewModel) {
 @Composable
 fun LiveVideoScreen(vm: VideoStoryViewModel) {
     val context = LocalContext.current
-    val scene = vm.scenes.getOrNull(vm.currentIndex)
+    val currentIdx = vm.currentIndex.value
+    val scene = vm.scenes.value.getOrNull(currentIdx)
 
     val zoomScale by animateFloatAsState(
         targetValue = 1.16f,
@@ -458,20 +457,20 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
                 )
         )
 
-        // Top Reel Progress Bar (Fixed the 3.5.dp bug to 4.dp!)
+        // Top Reel Progress Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 28.dp, start = 16.dp, end = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            vm.scenes.forEachIndexed { idx, _ ->
+            vm.scenes.value.forEachIndexed { idx, _ ->
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .height(4.dp)
                         .background(
-                            color = if (idx <= vm.currentIndex) Color(0xFFFFD700) else Color.White.copy(alpha = 0.25f),
+                            color = if (idx <= currentIdx) Color(0xFFFFD700) else Color.White.copy(alpha = 0.25f),
                             shape = CircleShape
                         )
                 )
@@ -524,7 +523,7 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
             ) {
                 Button(
                     onClick = { vm.prev(context) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f))
+                    ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f))
                 ) {
                     Text("⏮ Prev", color = Color.White)
                 }
@@ -533,7 +532,7 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
                     onClick = { vm.togglePause() },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700))
                 ) {
-                    Text(if (vm.isPaused) "▶ Resume" else "⏸ Pause", color = Color.Black, fontWeight = FontWeight.Bold)
+                    Text(if (vm.isPaused.value) "▶ Resume" else "⏸ Pause", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
 
                 Button(
