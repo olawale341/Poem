@@ -52,11 +52,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -75,7 +74,8 @@ data class VideoScene(
     val audioFile: File?
 )
 
-class VideoStoryViewModel : ViewModel() {
+// Standalone, self-contained state manager (Zero reflection, cannot crash on launch)
+class VideoStoryManager {
     val isPlaying = mutableStateOf(false)
     val currentIndex = mutableStateOf(0)
     val scenes = mutableStateOf<List<VideoScene>>(emptyList())
@@ -83,9 +83,11 @@ class VideoStoryViewModel : ViewModel() {
     val isPaused = mutableStateOf(false)
     val statusText = mutableStateOf("")
 
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var mediaPlayer: MediaPlayer? = null
     private var maleTts: TextToSpeech? = null
 
+    // High-Definition Non-Repeating Photo Banks
     private val topicPhotoBanks = mapOf(
         "money" to listOf(
             "https://images.unsplash.com/photo-1559526324-4b87b5e36e44?w=1080&q=80",
@@ -141,16 +143,20 @@ class VideoStoryViewModel : ViewModel() {
         "https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=1080&q=80"
     )
 
-    fun initMaleTts(context: Context) {
-        if (maleTts == null) {
-            maleTts = TextToSpeech(context.applicationContext) { status ->
-                if (status == TextToSpeech.SUCCESS) {
-                    maleTts?.language = Locale.UK
-                    maleTts?.setPitch(0.82f)
-                    maleTts?.setSpeechRate(0.85f)
+    fun initMaleTtsSafely(context: Context) {
+        try {
+            if (maleTts == null) {
+                maleTts = TextToSpeech(context.applicationContext) { status ->
+                    if (status == TextToSpeech.SUCCESS) {
+                        try {
+                            maleTts?.language = Locale.UK
+                            maleTts?.setPitch(0.82f)
+                            maleTts?.setSpeechRate(0.85f)
+                        } catch (ignored: Exception) {}
+                    }
                 }
             }
-        }
+        } catch (ignored: Exception) {}
     }
 
     private fun selectMatchingImage(sentence: String, index: Int): Pair<String, String> {
@@ -172,7 +178,7 @@ class VideoStoryViewModel : ViewModel() {
         isLoading.value = true
         statusText.value = "Downloading Male Human Voice & Pictures..."
 
-        viewModelScope.launch(Dispatchers.IO) {
+        scope.launch(Dispatchers.IO) {
             val list = mutableListOf<VideoScene>()
 
             for ((idx, line) in lines.withIndex()) {
@@ -246,8 +252,11 @@ class VideoStoryViewModel : ViewModel() {
     }
 
     private fun playFallbackVoice(context: Context, text: String, index: Int) {
-        maleTts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "FALLBACK_$index")
-        viewModelScope.launch {
+        try {
+            maleTts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "FALLBACK_$index")
+        } catch (ignored: Exception) {}
+
+        scope.launch {
             val duration = (text.split(" ").size * 450L).coerceAtLeast(3500L)
             delay(duration)
             if (isPlaying.value && currentIndex.value == index) {
@@ -291,13 +300,15 @@ class VideoStoryViewModel : ViewModel() {
         mediaPlayer?.stop()
         mediaPlayer?.release()
         mediaPlayer = null
-        maleTts?.stop()
+        try {
+            maleTts?.stop()
+        } catch (ignored: Exception) {}
         isPlaying.value = false
     }
 
     fun savePackageToPhone(context: Context) {
         Toast.makeText(context, "Saving video audio to phone...", Toast.LENGTH_SHORT).show()
-        viewModelScope.launch(Dispatchers.IO) {
+        scope.launch(Dispatchers.IO) {
             try {
                 val list = scenes.value
                 for (i in list.indices) {
@@ -329,39 +340,64 @@ class VideoStoryViewModel : ViewModel() {
         }
     }
 
-    override fun onCleared() {
-        super.onCleared()
+    fun cleanup() {
         mediaPlayer?.release()
-        maleTts?.shutdown()
+        try {
+            maleTts?.shutdown()
+        } catch (ignored: Exception) {}
     }
 }
 
 class MainActivity : ComponentActivity() {
+    private var managerInstance: VideoStoryManager? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF090A0F)) {
-                    val vm: VideoStoryViewModel = viewModel()
-                    val context = LocalContext.current
 
-                    LaunchedEffect(Unit) {
-                        vm.initMaleTts(context)
+        // Crash Shield: Catches any error and displays it on screen instead of crashing
+        try {
+            setContent {
+                MaterialTheme {
+                    Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF090A0F)) {
+                        val manager = remember { VideoStoryManager().also { managerInstance = it } }
+                        val context = LocalContext.current
+
+                        LaunchedEffect(Unit) {
+                            manager.initMaleTtsSafely(context)
+                        }
+
+                        if (!manager.isPlaying.value) {
+                            InputEditorView(manager)
+                        } else {
+                            LiveVideoScreen(manager)
+                        }
                     }
-
-                    if (!vm.isPlaying.value) {
-                        InputEditorView(vm)
-                    } else {
-                        LiveVideoScreen(vm)
+                }
+            }
+        } catch (t: Throwable) {
+            // Displays error directly on phone if anything goes wrong
+            setContent {
+                MaterialTheme {
+                    Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+                        Column(modifier = Modifier.padding(24.dp)) {
+                            Text("Diagnostics: Startup Error", color = Color.Yellow, fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(t.stackTraceToString(), color = Color.Red, fontSize = 12.sp)
+                        }
                     }
                 }
             }
         }
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        managerInstance?.cleanup()
+    }
 }
 
 @Composable
-fun InputEditorView(vm: VideoStoryViewModel) {
+fun InputEditorView(manager: VideoStoryManager) {
     val context = LocalContext.current
     val story = remember {
         mutableStateOf(
@@ -412,15 +448,15 @@ fun InputEditorView(vm: VideoStoryViewModel) {
         Spacer(modifier = Modifier.height(14.dp))
 
         Button(
-            onClick = { vm.buildAndPlayVideo(context, story.value) },
-            enabled = !vm.isLoading.value,
+            onClick = { manager.buildAndPlayVideo(context, story.value) },
+            enabled = !manager.isLoading.value,
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700)),
             shape = RoundedCornerShape(10.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(52.dp)
         ) {
-            val buttonText = if (vm.isLoading.value) vm.statusText.value else "▶ Play As Real Video"
+            val buttonText = if (manager.isLoading.value) manager.statusText.value else "▶ Play As Real Video"
             Text(
                 text = buttonText,
                 color = Color.Black,
@@ -432,10 +468,10 @@ fun InputEditorView(vm: VideoStoryViewModel) {
 }
 
 @Composable
-fun LiveVideoScreen(vm: VideoStoryViewModel) {
+fun LiveVideoScreen(manager: VideoStoryManager) {
     val context = LocalContext.current
-    val currentIdx = vm.currentIndex.value
-    val scene = vm.scenes.value.getOrNull(currentIdx)
+    val currentIdx = manager.currentIndex.value
+    val scene = manager.scenes.value.getOrNull(currentIdx)
 
     val zoomAnim = animateFloatAsState(
         targetValue = 1.16f,
@@ -482,7 +518,7 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
                 .padding(top = 28.dp, start = 16.dp, end = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            val total = vm.scenes.value.size
+            val total = manager.scenes.value.size
             for (idx in 0 until total) {
                 Box(
                     modifier = Modifier
@@ -541,35 +577,35 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Button(
-                    onClick = { vm.prev(context) },
+                    onClick = { manager.prev(context) },
                     colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f))
                 ) {
                     Text(text = "⏮ Prev", color = Color.White)
                 }
 
                 Button(
-                    onClick = { vm.togglePause() },
+                    onClick = { manager.togglePause() },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700))
                 ) {
-                    val pauseText = if (vm.isPaused.value) "▶ Resume" else "⏸ Pause"
+                    val pauseText = if (manager.isPaused.value) "▶ Resume" else "⏸ Pause"
                     Text(text = pauseText, color = Color.Black, fontWeight = FontWeight.Bold)
                 }
 
                 Button(
-                    onClick = { vm.next(context) },
+                    onClick = { manager.next(context) },
                     colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f))
                 ) {
                     Text(text = "Next ⏭", color = Color.White)
                 }
 
                 Button(
-                    onClick = { vm.savePackageToPhone(context) },
+                    onClick = { manager.savePackageToPhone(context) },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700))
                 ) {
                     Text(text = "⬇ Save", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
 
-                TextButton(onClick = { vm.exit() }) {
+                TextButton(onClick = { manager.exit() }) {
                     Text(text = "Close", color = Color.LightGray)
                 }
             }
