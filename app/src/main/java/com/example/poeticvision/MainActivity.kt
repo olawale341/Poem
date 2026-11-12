@@ -68,7 +68,6 @@ class VideoStoryViewModel : ViewModel() {
     private var mediaPlayer: MediaPlayer? = null
     private var maleTts: TextToSpeech? = null
 
-    // High-Definition Non-Repeating Curated Photo Banks for Any Subject
     private val topicPhotoBanks = mapOf(
         "money" to listOf(
             "https://images.unsplash.com/photo-1559526324-4b87b5e36e44?w=1080&q=80",
@@ -212,7 +211,7 @@ class VideoStoryViewModel : ViewModel() {
                     }
                     setOnCompletionListener {
                         if (currentIndex.value + 1 < scenes.value.size) {
-                            currentIndex.value++
+                            currentIndex.value = currentIndex.value + 1
                             playScene(context, currentIndex.value)
                         } else {
                             isPlaying.value = false
@@ -235,7 +234,7 @@ class VideoStoryViewModel : ViewModel() {
             delay(duration)
             if (isPlaying.value && currentIndex.value == index) {
                 if (currentIndex.value + 1 < scenes.value.size) {
-                    currentIndex.value++
+                    currentIndex.value = currentIndex.value + 1
                     playScene(context, currentIndex.value)
                 } else {
                     isPlaying.value = false
@@ -258,14 +257,14 @@ class VideoStoryViewModel : ViewModel() {
 
     fun next(context: Context) {
         if (currentIndex.value + 1 < scenes.value.size) {
-            currentIndex.value++
+            currentIndex.value = currentIndex.value + 1
             playScene(context, currentIndex.value)
         }
     }
 
     fun prev(context: Context) {
         if (currentIndex.value - 1 >= 0) {
-            currentIndex.value--
+            currentIndex.value = currentIndex.value - 1
             playScene(context, currentIndex.value)
         }
     }
@@ -282,7 +281,9 @@ class VideoStoryViewModel : ViewModel() {
         Toast.makeText(context, "Saving video audio & photos to phone...", Toast.LENGTH_SHORT).show()
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                scenes.value.forEachIndexed { i, scene ->
+                val list = scenes.value
+                for (i in list.indices) {
+                    val scene = list[i]
                     scene.audioFile?.let { src ->
                         val fileName = "PoeticVision_Scene_${i + 1}_${System.currentTimeMillis()}.mp3"
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -417,11 +418,11 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
     val currentIdx = vm.currentIndex.value
     val scene = vm.scenes.value.getOrNull(currentIdx)
 
-    val zoomScale by animateFloatAsState(
+    val zoomScale = animateFloatAsState(
         targetValue = 1.16f,
         animationSpec = tween(durationMillis = 7000, easing = LinearEasing),
         label = "Zoom"
-    )
+    ).value
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         // High-Definition Matched Photo from Unsplash CDN
@@ -464,7 +465,8 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
                 .padding(top = 28.dp, start = 16.dp, end = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            vm.scenes.value.forEachIndexed { idx, _ ->
+            val list = vm.scenes.value
+            for (idx in list.indices) {
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -523,7 +525,7 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
             ) {
                 Button(
                     onClick = { vm.prev(context) },
-                    ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f))
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f))
                 ) {
                     Text("⏮ Prev", color = Color.White)
                 }
