@@ -16,11 +16,31 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
@@ -58,16 +78,17 @@ data class VideoScene(
 )
 
 class VideoStoryViewModel : ViewModel() {
-    val isPlaying = mutableStateOf(false)
-    val currentIndex = mutableStateOf(0)
-    val scenes = mutableStateOf<List<VideoScene>>(emptyList())
-    val isLoading = mutableStateOf(false)
-    val isPaused = mutableStateOf(false)
-    val statusText = mutableStateOf("")
+    var isPlaying by mutableStateOf(false)
+    var currentIndex by mutableStateOf(0)
+    var scenes by mutableStateOf<List<VideoScene>>(emptyList())
+    var isLoading by mutableStateOf(false)
+    var isPaused by mutableStateOf(false)
+    var statusText by mutableStateOf("")
 
     private var mediaPlayer: MediaPlayer? = null
     private var maleTts: TextToSpeech? = null
 
+    // High-Definition Non-Repeating Photo Banks
     private val topicPhotoBanks = mapOf(
         "money" to listOf(
             "https://images.unsplash.com/photo-1559526324-4b87b5e36e44?w=1080&q=80",
@@ -151,8 +172,8 @@ class VideoStoryViewModel : ViewModel() {
         val lines = fullText.lines().map { it.trim() }.filter { it.isNotBlank() }
         if (lines.isEmpty()) return
 
-        isLoading.value = true
-        statusText.value = "Downloading Male Human Voice & Pictures..."
+        isLoading = true
+        statusText = "Downloading Male Human Voice & Pictures..."
 
         viewModelScope.launch(Dispatchers.IO) {
             val list = mutableListOf<VideoScene>()
@@ -187,17 +208,17 @@ class VideoStoryViewModel : ViewModel() {
             }
 
             withContext(Dispatchers.Main) {
-                scenes.value = list
-                currentIndex.value = 0
-                isLoading.value = false
-                isPlaying.value = true
+                scenes = list
+                currentIndex = 0
+                isLoading = false
+                isPlaying = true
                 playScene(context, 0)
             }
         }
     }
 
     private fun playScene(context: Context, index: Int) {
-        val scene = scenes.value.getOrNull(index) ?: return
+        val scene = scenes.getOrNull(index) ?: return
         mediaPlayer?.release()
         mediaPlayer = null
 
@@ -207,14 +228,14 @@ class VideoStoryViewModel : ViewModel() {
                     setDataSource(scene.audioFile.absolutePath)
                     setOnPreparedListener {
                         start()
-                        isPaused.value = false
+                        isPaused = false
                     }
                     setOnCompletionListener {
-                        if (currentIndex.value + 1 < scenes.value.size) {
-                            currentIndex.value = currentIndex.value + 1
-                            playScene(context, currentIndex.value)
+                        if (currentIndex + 1 < scenes.size) {
+                            currentIndex++
+                            playScene(context, currentIndex)
                         } else {
-                            isPlaying.value = false
+                            isPlaying = false
                         }
                     }
                     prepare()
@@ -232,12 +253,12 @@ class VideoStoryViewModel : ViewModel() {
         viewModelScope.launch {
             val duration = (text.split(" ").size * 450L).coerceAtLeast(3500L)
             delay(duration)
-            if (isPlaying.value && currentIndex.value == index) {
-                if (currentIndex.value + 1 < scenes.value.size) {
-                    currentIndex.value = currentIndex.value + 1
-                    playScene(context, currentIndex.value)
+            if (isPlaying && currentIndex == index) {
+                if (currentIndex + 1 < scenes.size) {
+                    currentIndex++
+                    playScene(context, currentIndex)
                 } else {
-                    isPlaying.value = false
+                    isPlaying = false
                 }
             }
         }
@@ -247,25 +268,25 @@ class VideoStoryViewModel : ViewModel() {
         mediaPlayer?.let {
             if (it.isPlaying) {
                 it.pause()
-                isPaused.value = true
+                isPaused = true
             } else {
                 it.start()
-                isPaused.value = false
+                isPaused = false
             }
         }
     }
 
     fun next(context: Context) {
-        if (currentIndex.value + 1 < scenes.value.size) {
-            currentIndex.value = currentIndex.value + 1
-            playScene(context, currentIndex.value)
+        if (currentIndex + 1 < scenes.size) {
+            currentIndex++
+            playScene(context, currentIndex)
         }
     }
 
     fun prev(context: Context) {
-        if (currentIndex.value - 1 >= 0) {
-            currentIndex.value = currentIndex.value - 1
-            playScene(context, currentIndex.value)
+        if (currentIndex - 1 >= 0) {
+            currentIndex--
+            playScene(context, currentIndex)
         }
     }
 
@@ -274,14 +295,14 @@ class VideoStoryViewModel : ViewModel() {
         mediaPlayer?.release()
         mediaPlayer = null
         maleTts?.stop()
-        isPlaying.value = false
+        isPlaying = false
     }
 
     fun savePackageToPhone(context: Context) {
-        Toast.makeText(context, "Saving video audio & photos to phone...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Saving video audio to phone...", Toast.LENGTH_SHORT).show()
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val list = scenes.value
+                val list = scenes
                 for (i in list.indices) {
                     val scene = list[i]
                     scene.audioFile?.let { src ->
@@ -331,7 +352,7 @@ class MainActivity : ComponentActivity() {
                         vm.initMaleTts(context)
                     }
 
-                    if (!vm.isPlaying.value) {
+                    if (!vm.isPlaying) {
                         InputEditorView(vm)
                     } else {
                         LiveVideoScreen(vm)
@@ -345,7 +366,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun InputEditorView(vm: VideoStoryViewModel) {
     val context = LocalContext.current
-    val story = remember {
+    var story by remember {
         mutableStateOf(
             "Money flows to those who master patience and focus.\n" +
             "In the dark night, the neon city comes alive with hustle.\n" +
@@ -375,8 +396,8 @@ fun InputEditorView(vm: VideoStoryViewModel) {
         Spacer(modifier = Modifier.height(14.dp))
 
         OutlinedTextField(
-            value = story.value,
-            onValueChange = { story.value = it },
+            value = story,
+            onValueChange = { story = it },
             label = { Text("Write your story / poem (one sentence per line)") },
             modifier = Modifier
                 .fillMaxWidth()
@@ -394,8 +415,8 @@ fun InputEditorView(vm: VideoStoryViewModel) {
         Spacer(modifier = Modifier.height(14.dp))
 
         Button(
-            onClick = { vm.buildAndPlayVideo(context, story.value) },
-            enabled = !vm.isLoading.value,
+            onClick = { vm.buildAndPlayVideo(context, story) },
+            enabled = !vm.isLoading,
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700)),
             shape = RoundedCornerShape(10.dp),
             modifier = Modifier
@@ -403,7 +424,7 @@ fun InputEditorView(vm: VideoStoryViewModel) {
                 .height(52.dp)
         ) {
             Text(
-                if (vm.isLoading.value) vm.statusText.value else "▶ Play As Real Video",
+                if (vm.isLoading) vm.statusText else "▶ Play As Real Video",
                 color = Color.Black,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp
@@ -415,17 +436,15 @@ fun InputEditorView(vm: VideoStoryViewModel) {
 @Composable
 fun LiveVideoScreen(vm: VideoStoryViewModel) {
     val context = LocalContext.current
-    val currentIdx = vm.currentIndex.value
-    val scene = vm.scenes.value.getOrNull(currentIdx)
+    val scene = vm.scenes.getOrNull(vm.currentIndex)
 
-    val zoomScale = animateFloatAsState(
+    val zoomScale by animateFloatAsState(
         targetValue = 1.16f,
         animationSpec = tween(durationMillis = 7000, easing = LinearEasing),
         label = "Zoom"
-    ).value
+    )
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // High-Definition Matched Photo from Unsplash CDN
         Crossfade(
             targetState = scene?.imageUrl,
             animationSpec = tween(durationMillis = 800),
@@ -443,7 +462,6 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
             }
         }
 
-        // Dark Vignette so white text is crystal clear
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -465,14 +483,14 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
                 .padding(top = 28.dp, start = 16.dp, end = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            val list = vm.scenes.value
-            for (idx in list.indices) {
+            val total = vm.scenes.size
+            for (idx in 0 until total) {
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .height(4.dp)
                         .background(
-                            color = if (idx <= currentIdx) Color(0xFFFFD700) else Color.White.copy(alpha = 0.25f),
+                            color = if (idx <= vm.currentIndex) Color(0xFFFFD700) else Color.White.copy(alpha = 0.25f),
                             shape = CircleShape
                         )
                 )
@@ -508,7 +526,7 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
                     fontSize = 24.sp,
                     fontFamily = FontFamily.Serif,
                     fontStyle = FontStyle.Italic,
-                    fontWeight = FontWeight.Normal,
+                    FontWeight.Normal,
                     textAlign = TextAlign.Center,
                     lineHeight = 36.sp,
                     modifier = Modifier.padding(horizontal = 8.dp)
@@ -534,7 +552,7 @@ fun LiveVideoScreen(vm: VideoStoryViewModel) {
                     onClick = { vm.togglePause() },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700))
                 ) {
-                    Text(if (vm.isPaused.value) "▶ Resume" else "⏸ Pause", color = Color.Black, fontWeight = FontWeight.Bold)
+                    Text(if (vm.isPaused) "▶ Resume" else "⏸ Pause", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
 
                 Button(
